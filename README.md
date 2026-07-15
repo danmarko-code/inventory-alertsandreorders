@@ -146,7 +146,90 @@ routes/web.php                                        → all submodule routes
 
 ---
 
-## Changelog — full development history
+## Database schema
+
+7 tables specific to this submodule (plus Laravel's default framework tables: `cache`, `jobs`, `failed_jobs`, `password_reset_tokens`, `sessions` — not part of the ERD, included automatically).
+
+### `users`
+| Column | Type | Notes |
+|---|---|---|
+| id | bigint, PK | |
+| name | string | e.g. "Admin 1" |
+| email | string | |
+| role | string | "admin" |
+| avatar_color | string | hex color for the UI avatar chip |
+
+### `inventory_items`
+| Column | Type | Notes |
+|---|---|---|
+| id | string, PK | e.g. "PC-001" (not auto-incrementing) |
+| name | string | |
+| category | string | |
+| currentQty | int | |
+| minLimit | int | |
+| maxLimit | int | |
+| auto_reorder | boolean | if true, shortages auto-draft a PO |
+| reorder_qty | int, nullable | qty to order when auto-reorder fires |
+
+### `stock_alerts`
+| Column | Type | Notes |
+|---|---|---|
+| id | bigint, PK | |
+| inventory_item_id | string, FK → inventory_items | |
+| type | string | out_of_stock / low_stock / overstock |
+| severity | string | critical / high / medium |
+| current_qty, threshold_qty | int | snapshot at time of detection |
+| status | string | active / acknowledged / resolved |
+| acknowledged_by | bigint, FK → users, nullable | |
+
+### `approval_requests`
+| Column | Type | Notes |
+|---|---|---|
+| reqId | bigint, PK | (custom primary key name) |
+| requester | string | display name, derived server-side |
+| requested_by | bigint, FK → users, nullable | |
+| status | string | Draft / Pending / Ordered / Received / Voided |
+| source | string | "manual" or "auto" |
+| triggered_by_alert_id | bigint, FK → stock_alerts, nullable | set when auto-generated |
+| supplier, warehouse | string | |
+| itemsArray | json | legacy, kept for backwards compatibility only |
+
+### `approval_request_items`
+| Column | Type | Notes |
+|---|---|---|
+| id | bigint, PK | |
+| approval_request_id | bigint, FK → approval_requests.reqId | |
+| inventory_item_id | string, FK → inventory_items | |
+| qty | int | |
+
+### `stock_movements`
+| Column | Type | Notes |
+|---|---|---|
+| id | bigint, PK | |
+| inventory_item_id | string, FK → inventory_items | |
+| type | string | e.g. "receipt" |
+| qty | int | |
+| source_type | string | e.g. "purchase_order" |
+| source_id | bigint, nullable | e.g. the approval_requests.reqId |
+| created_by | bigint, FK → users, nullable | |
+
+### `activity_logs`
+| Column | Type | Notes |
+|---|---|---|
+| id | bigint, PK | |
+| user_id | bigint, FK → users, nullable | null = system-generated entry |
+| action | string | e.g. "po.approved" |
+| type | string | info / success / error |
+| description | string | human-readable summary |
+
+### Relationships summary
+- One **user** can make many approval requests, acknowledge many alerts, record many stock movements, and perform many activity log entries
+- One **inventory item** can have many stock alerts, appear in many approval request line items, and have many stock movements
+- One **approval request** has many line items (`approval_request_items`)
+- One **stock alert** can trigger one approval request (when auto-reorder creates a draft from it)
+
+---
+
 
 Everything below was added/changed on top of the original submodule, in the order it happened.
 
