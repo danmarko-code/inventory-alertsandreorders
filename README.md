@@ -41,9 +41,8 @@ composer install
 
 ### 3. Create your environment file
 ```bash
-copy .env.example .env
+cp .env.example .env
 ```
-*(On Mac/Linux, use `cp .env.example .env` instead)*
 
 ### 4. Generate the application key
 ```bash
@@ -51,13 +50,11 @@ php artisan key:generate
 ```
 
 ### 5. Create a MySQL database
-Using your database tool (HeidiSQL, phpMyAdmin, or MySQL CLI), create a new empty database — for example:
 ```sql
 CREATE DATABASE inventory_alerts_reorders;
 ```
 
 ### 6. Configure your `.env` database settings
-Open `.env` and set:
 ```env
 DB_CONNECTION=mysql
 DB_HOST=127.0.0.1
@@ -66,16 +63,13 @@ DB_DATABASE=inventory_alerts_reorders
 DB_USERNAME=root
 DB_PASSWORD=
 ```
-Use whatever username/password your local MySQL actually requires.
 
 ### 7. Run migrations and seed sample data
 ```bash
 php artisan migrate --seed
 ```
-This creates all tables and populates 15 sample inventory items, 3 admin accounts, and starter data.
 
 ### 8. Run the initial stock check
-Seeding data does not automatically detect alerts — run this once after seeding:
 ```bash
 php artisan stock:check-levels
 ```
@@ -84,54 +78,48 @@ php artisan stock:check-levels
 ```bash
 php artisan serve
 ```
-Visit **http://127.0.0.1:8000** in your browser.
-
-*(If using Laragon, you can instead just visit your project's `.test` domain, e.g. `http://your-project-name.test`, once Laragon's Apache/Nginx is running.)*
+Visit **http://127.0.0.1:8000**, or your Laragon `.test` domain.
 
 ---
 
 ## How to use the submodule
 
 ### Switching admin accounts
-Click the account switcher at the bottom of the sidebar to act as Admin 1, 2, or 3. No password required — this is for demo/testing purposes, tracking who performed which action.
+Click the account switcher at the bottom of the sidebar to act as Admin 1, 2, or 3. No password required.
 
 ### Managing stock thresholds
-On the Inventory table, edit the **Min Limit** and **Max Limit** fields directly per item. Changes save automatically and instantly re-check alert status.
+Edit **Min Limit** / **Max Limit** directly on any item row. Saves automatically and re-checks alert status.
 
 ### Turning on auto-reorder
-Toggle the **Auto-Reorder** switch on any item's row. When ON, if that item drops into Low Stock or Out of Stock, the system will automatically create a **Draft** purchase order for it — no manual action needed.
+Toggle the **Auto-Reorder** switch on any item. When ON, a shortage automatically creates a **Draft** purchase order.
 
 ### Manually creating a purchase order
-Click **Create PO** on any item row, or select multiple items and use **Configure & Run Batch PO** to order several items at once.
+Use **Create PO** per item, or select multiple and use **Configure & Run Batch PO**.
 
-### Reviewing the Order Approvals Pipeline
-Every purchase order — manual or auto-generated — appears here with a status:
+### Order Approvals Pipeline statuses
 
 | Status | Meaning | Available action |
 |---|---|---|
-| Draft | Auto-generated, awaiting admin review | Submit to Pipeline, or Discard |
+| Draft | Auto-generated, awaiting review | Submit to Pipeline, or Discard |
 | Pending | Submitted, awaiting approval | Approve or Void |
-| Ordered | Approved, order placed with supplier | Mark as Received |
+| Ordered | Approved, placed with supplier | Mark as Received |
 | Received | Shipment confirmed | *(final state)* |
 | Voided | Cancelled | *(final state)* |
 
-**Note:** Discarding an auto-generated Draft also turns OFF auto-reorder for that item, so it won't immediately redraft the same order.
+**Note:** Discarding an auto-generated Draft also turns OFF auto-reorder for that item.
 
-### Refreshing alert detection manually
-If you want to re-check stock levels without waiting for the automatic triggers, run:
+### Manually refreshing alert detection
 ```bash
 php artisan stock:check-levels
 ```
-This runs automatically already when you: mark a PO received, edit a threshold, or toggle auto-reorder — so manual runs are mainly needed right after a fresh `migrate:fresh --seed`.
+Runs automatically already on: marking a PO received, editing a threshold, or toggling auto-reorder.
 
-### Viewing the Activity Log
-Every meaningful action (threshold changes, PO approvals, auto-reorder events, alert acknowledgements) is permanently logged and viewable in the Activity Log panel, filterable by admin.
+### Activity Log
+Every action is permanently logged and filterable by admin.
 
 ---
 
 ## Resetting to a clean state
-
-To wipe all data and start over with fresh sample data:
 ```bash
 php artisan migrate:fresh --seed
 php artisan stock:check-levels
@@ -155,3 +143,63 @@ resources/views/alerts-reorders.blade.php            → main page UI
 resources/views/layouts/app.blade.php                → shared sidebar/header layout
 routes/web.php                                        → all submodule routes
 ```
+
+---
+
+## Changelog — full development history
+
+Everything below was added/changed on top of the original submodule, in the order it happened.
+
+### 1. Admin identity & session-based account switching
+- Added `role`, `avatar_color` to `users`
+- Added `AdminUsersSeeder` (Admin 1/2/3, no real passwords used — session-based only)
+- Added `ResolveActingAdmin` middleware — resolves the current "acting admin" from session, no login form
+- Added `AccountSwitcherController` — `POST /account/switch`
+- Added the account switcher dropdown to the sidebar in `layouts/app.blade.php`
+
+### 2. Purchase order data integrity
+- **Problem:** `requester` was a free-text field trusted straight from the browser — spoofable by anyone
+- **Fix:** `requester` is now derived server-side from the acting admin; added `requested_by` foreign key to `users`
+- **Problem:** order line items were stored as a raw JSON blob (`itemsArray`) with no relational integrity
+- **Fix:** added `approval_request_items` table + `ApprovalRequestItem` model; `submitPO()` now writes to both (transition period), `processPipeline()` prefers the relational rows
+
+### 3. Real, persisted stock alerts
+- **Problem:** low/out-of-stock/overstock status was calculated live in the browser every page load — nothing was ever stored
+- **Fix:** added `stock_alerts` table + `StockAlert` model, and the `stock:check-levels` Artisan command, which detects shortages/overstock and auto-resolves alerts once stock recovers
+
+### 4. Separated "ordering" from "receiving"
+- **Problem:** approving a PO instantly added quantity to stock — as if approval and physical delivery were the same moment
+- **Fix:** approving now sets status to `Ordered` only (no stock change). Added a separate `markReceived()` action/button — this was the only place stock changed, until change #7 below
+
+### 5. Persistent Activity Log
+- **Problem:** the Activity Log panel only lived in browser memory (`addTransactionLog()`), resetting on every page refresh
+- **Fix:** added `activity_logs` table + `ActivityLog` model with a `record()` helper. Every mutating action (thresholds, PO approvals, receiving, alert acknowledgement) now logs persistently and is rendered from real server data
+
+### 6. Automated replenishment (auto-reorder)
+- Added `auto_reorder`, `reorder_qty` columns to `inventory_items`
+- Added `AutoReorderService` — scans active low/out-of-stock alerts and auto-drafts a PO for any item with auto-reorder enabled, skipping items that already have an order "in flight" (Draft/Pending/Ordered) to avoid duplicates
+- Wired into `stock:check-levels`, so the same command that detects alerts also drafts reorders in one pass
+- Added per-item toggle switch, plus `submitDraft()` / `discardDraft()` actions on the pipeline board
+
+### 7. Bug fixes — duplicate drafts & stale alerts
+- **Problem:** duplicate check in `AutoReorderService` occasionally allowed multiple drafts for the same item
+- **Fix:** rewrote the "already in flight" check to use a direct DB query instead of an Eloquent relationship lookup, plus an in-memory guard within a single run. Added `reorders:cleanup-duplicates` one-time cleanup command
+- **Problem:** alerts went stale — e.g. after receiving stock, the alert stayed "active" forever since nothing re-checked it, causing auto-reorder to keep firing on already-resolved shortages
+- **Fix:** `markReceived()`, `toggleAutoReorder()`, and `updateLimits()` all now re-run `stock:check-levels` after they change anything that could affect alert accuracy
+
+### 8. Removed the "Simulate Stock Event" debug widget
+- Fully removed the floating widget UI, its JS functions, its route, and its controller method (`simulateStockEvent`) — this was a testing/demo tool, not part of the submodule's real functionality
+
+### 9. Scope separation — stock quantity ownership
+- **Decision:** this submodule should only detect shortages and manage the ordering workflow — not own actual stock quantity changes, since a separate Stock Movements submodule will own that
+- **Fix:** added `stock_movements` table + `StockMovement` model. `markReceived()` no longer touches `inventory_items.currentQty` at all — it now records a `stock_movements` row (a handoff record) and leaves applying it to real stock as the Stock Movements submodule's responsibility
+- Updated the "Shipment Received" popup message to accurately reflect this (previously incorrectly claimed "stock levels have been updated")
+
+### 10. Discard-draft UX fix
+- **Problem:** discarding an auto-generated draft PO didn't turn off auto-reorder for that item, so the very next check would just draft an identical PO again
+- **Fix:** `discardDraft()` now automatically disables `auto_reorder` on the affected item when an auto-generated draft is declined, logs it, and shows a clear confirmation popup
+
+### Known limitations (not yet addressed)
+- No real password-based login (intentional, by design choice)
+- No pagination on any table (fine at current data scale)
+- `itemsArray` JSON column on `approval_requests` is still present for backwards compatibility alongside the relational `approval_request_items` table
